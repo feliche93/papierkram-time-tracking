@@ -1,14 +1,22 @@
 import { ActionPanel, Action, Form, showToast, Toast, LocalStorage } from "@raycast/api";
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
-import { useLocalStorage } from "@raycast/utils";
+import { useLocalStorage, useForm, FormValidation } from "@raycast/utils";
 
-// Define the structure for the form values
+// Define the structure for the form values managed by useForm
+interface PapierkramFormValues {
+  customerProject: string;
+  task: string;
+  comment: string;
+  isBillable: boolean;
+}
+
+// Define the structure for the final time entry submission
 interface TimeEntryValues {
   customerProject: string;
   task: string;
   comment: string;
-  startTime: Date | null;
-  endTime: Date | null;
+  startTime: Date;
+  endTime: Date;
   isBillable: boolean;
 }
 
@@ -39,27 +47,88 @@ function formatTime(totalSeconds: number): string {
 
 // Main command component
 export default function PapierkramTimeTrackingCommand() {
-  // Form field state
-  const { value: customerProject, setValue: setCustomerProject } = useLocalStorage<string>(LS_KEY_SAVED_PROJECT, "");
-  const { value: task, setValue: setTask } = useLocalStorage<string>(LS_KEY_SAVED_TASK, "");
-  const { value: comment, setValue: setComment } = useLocalStorage<string>(LS_KEY_SAVED_COMMENT, "");
-  const { value: isBillable, setValue: setIsBillable } = useLocalStorage<boolean>(LS_KEY_SAVED_IS_BILLABLE, true);
+  // --- Form State (Managed by useForm) ---
+  const { handleSubmit: handleFormSubmit, itemProps, values: formValues, reset: resetForm } = useForm<PapierkramFormValues>({
+    onSubmit(values) {
+      submitTimeEntry(values);
+    },
+    validation: {
+      customerProject: FormValidation.Required,
+    },
+    // initialValues will be set via effect after loading from LocalStorage
+  });
+
+  // --- Timer State (Managed by useLocalStorage & useState) ---
+  const { value: isRunning, setValue: setIsRunning } = useLocalStorage<boolean>(LS_KEY_IS_RUNNING, false);
+  const { value: accumulatedSeconds, setValue: setAccumulatedSeconds } = useLocalStorage<number>(LS_KEY_ACCUMULATED_SECONDS, 0);
+  const { value: lastStartTime, setValue: setLastStartTime } = useLocalStorage<number | null>(LS_KEY_LAST_START_TIME, null);
   const { value: startTimeStr, setValue: setStartTimeStr } = useLocalStorage<string | null>(LS_KEY_SAVED_START_TIME, null);
   const startTime = useMemo(() => startTimeStr ? new Date(startTimeStr) : null, [startTimeStr]);
   const [endTime, setEndTime] = useState<Date | null>(null);
 
-  // Timer state
-  const { value: isRunning, setValue: setIsRunning } = useLocalStorage<boolean>(LS_KEY_IS_RUNNING, false);
-  const { value: accumulatedSeconds, setValue: setAccumulatedSeconds } = useLocalStorage<number>(LS_KEY_ACCUMULATED_SECONDS, 0);
-  const { value: lastStartTime, setValue: setLastStartTime } = useLocalStorage<number | null>(LS_KEY_LAST_START_TIME, null);
-
-  // Local state (non-persisted or needs parsing)
+  // --- Other State ---
   const [intervalId, setIntervalId] = useState<NodeJS.Timeout | null>(null);
-  const [displayTime, setDisplayTime] = useState<string>(formatTime(accumulatedSeconds ?? 0)); // Init with hook's default/loaded value
-  const [customerProjectError, setCustomerProjectError] = useState<string | undefined>();
-  const isInitialCalculationDone = useRef(false); // Ref to track initial calculation
+  const [displayTime, setDisplayTime] = useState<string>(formatTime(accumulatedSeconds ?? 0));
+  const isInitialCalculationDone = useRef(false);
+  const isLoadingFormValues = useRef(true); // Flag to prevent sync effect running before initial load
 
-  // --- Effects --- 
+  // --- Effects ---
+
+  // Effect: Load initial form values from LocalStorage ONCE on mount
+  useEffect(() => {
+    async function loadInitialFormValues() {
+      try {
+        const [initialProject, initialTask, initialComment, initialBillableStr] = await Promise.all([
+          LocalStorage.getItem<string>(LS_KEY_SAVED_PROJECT),
+          LocalStorage.getItem<string>(LS_KEY_SAVED_TASK),
+          LocalStorage.getItem<string>(LS_KEY_SAVED_COMMENT),
+          LocalStorage.getItem<string>(LS_KEY_SAVED_IS_BILLABLE) // Read as string first
+        ]);
+
+        const initialBillable = initialBillableStr === null ? true : initialBillableStr === 'true'; // Default true
+
+        console.log("Loaded initial values:", { initialProject, initialTask, initialComment, initialBillable });
+
+        resetForm({
+          customerProject: initialProject ?? "",
+          task: initialTask ?? "",
+          comment: initialComment ?? "",
+          isBillable: initialBillable,
+        });
+      } catch (error) {
+        console.error("Failed to load initial form values:", error);
+        showToast(Toast.Style.Failure, "Failed to load saved form data");
+        // Reset with defaults if loading fails
+        resetForm({ customerProject: "", task: "", comment: "", isBillable: true });
+      }
+      isLoadingFormValues.current = false; // Mark loading as complete
+    }
+    loadInitialFormValues();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Run only once
+
+  // Effect: Sync form state changes BACK to LocalStorage
+  useEffect(() => {
+    // Don't run sync until initial values are loaded
+    if (isLoadingFormValues.current) {
+      return;
+    }
+    async function saveFormValues() {
+      try {
+        console.log("Syncing form values to LocalStorage:", formValues);
+        await Promise.all([
+          LocalStorage.setItem(LS_KEY_SAVED_PROJECT, formValues.customerProject),
+          LocalStorage.setItem(LS_KEY_SAVED_TASK, formValues.task),
+          LocalStorage.setItem(LS_KEY_SAVED_COMMENT, formValues.comment),
+          LocalStorage.setItem(LS_KEY_SAVED_IS_BILLABLE, String(formValues.isBillable)) // Save boolean as string
+        ]);
+      } catch (error) {
+        console.error("Failed to sync form values to LocalStorage:", error);
+        // Optional: Show toast or handle error
+      }
+    }
+    saveFormValues();
+  }, [formValues]); // Run whenever formValues object changes
 
   // Effect 2: Perform initial elapsed time calculation if timer was running when closed
   useEffect(() => {
@@ -76,7 +145,7 @@ export default function PapierkramTimeTrackingCommand() {
       }
       isInitialCalculationDone.current = true; // Mark calculation as done
     }
-  }, [isRunning, lastStartTime, accumulatedSeconds, setAccumulatedSeconds, setLastStartTime]);
+  }, [isRunning, lastStartTime, accumulatedSeconds]);
 
   // Effect 3: Interval timer effect for live updates / displaying paused time
   useEffect(() => {
@@ -110,33 +179,26 @@ export default function PapierkramTimeTrackingCommand() {
     if (!isRunning) {
       setDisplayTime(formatTime(accumulatedSeconds ?? 0)); 
     }
-  }, [isRunning, lastStartTime, accumulatedSeconds, intervalId]);
+  }, [isRunning, lastStartTime, accumulatedSeconds]);
 
-  // Validation function
-  const validateCustomerProject = useCallback((value: string | undefined) => {
-    if (value && value.length > 0) {
-      setCustomerProjectError(undefined);
-      return true;
-    } else {
-      setCustomerProjectError("Customer/Project cannot be empty");
-      return false;
-    }
-  }, []);
-
-  // --- Timer Actions --- 
+  // --- Timer Actions ---
   const handleStartTimer = useCallback(async () => {
-    if (!validateCustomerProject(customerProject)) return;
+    // Validation is now handled by useForm before onSubmit triggers
+    // We only need to ensure project isn't empty conceptually before starting
+    if (!formValues.customerProject) {
+        showToast(Toast.Style.Failure, "Please enter a Customer/Project before starting.");
+        // Optional: focus the field: focus('customerProject') // need to get focus from useForm return
+        return;
+    }
     const now = new Date();
     const nowTimestamp = now.getTime();
-
     setStartTimeStr(now.toISOString());
     setEndTime(null);
     await setAccumulatedSeconds(0);
     await setLastStartTime(nowTimestamp);
     await setIsRunning(true);
-
     showToast(Toast.Style.Success, "Timer Started");
-  }, [customerProject, validateCustomerProject, setAccumulatedSeconds, setLastStartTime, setIsRunning, setStartTimeStr]);
+  }, [formValues.customerProject, setAccumulatedSeconds, setLastStartTime, setIsRunning, setStartTimeStr]); // Include formValues.customerProject
 
   const handlePauseTimer = useCallback(async () => {
     if (intervalId) clearInterval(intervalId);
@@ -162,7 +224,10 @@ export default function PapierkramTimeTrackingCommand() {
   }, [intervalId, lastStartTime, accumulatedSeconds, setAccumulatedSeconds, setLastStartTime, setIsRunning]);
 
   const handleResumeTimer = useCallback(async () => {
-    if (!validateCustomerProject(customerProject)) return;
+    if (!formValues.customerProject) {
+        showToast(Toast.Style.Failure, "Please ensure Customer/Project is filled before resuming.");
+        return;
+    }
     if (!startTime) {
       showToast(Toast.Style.Failure, "Cannot resume without a start time.");
       return;
@@ -172,109 +237,98 @@ export default function PapierkramTimeTrackingCommand() {
     await setIsRunning(true);
     setEndTime(null); 
     showToast(Toast.Style.Success, "Timer Resumed");
-  }, [customerProject, validateCustomerProject, startTime, setLastStartTime, setIsRunning]);
+  }, [formValues.customerProject, startTime, setLastStartTime, setIsRunning]); // Include formValues.customerProject
 
   const handleResetTimer = useCallback(async () => {
+    console.log("handleResetTimer called");
     if (intervalId) clearInterval(intervalId);
     setIntervalId(null);
     
-    // Clear persisted state using setValue(initialValue) or removeValue() from useLocalStorage if available (or manual LocalStorage.removeItem)
+    // Reset timer state
     await setIsRunning(false);
     await setAccumulatedSeconds(0);
     await setLastStartTime(null);
-    await setCustomerProject("");
-    await setTask("");
-    await setComment("");
-    await setIsBillable(true);
-    // Clear start time string state
-    setStartTimeStr(null);
-    // await LocalStorage.removeItem(LS_KEY_SAVED_START_TIME); // No longer needed
-
-    // Reset local state
-    // setStartTime(new Date()); // No longer setting Date object directly
-    setEndTime(null);
+    setStartTimeStr(null); // Clear start time string state
+    setEndTime(null);      // Clear local end time state
     setDisplayTime("00:00:00");
 
+    // Reset form fields using useForm's reset
+    const defaultFormValues = { customerProject: "", task: "", comment: "", isBillable: true };
+    resetForm(defaultFormValues);
+    // Sync effect will clear LocalStorage for form fields
+
     showToast(Toast.Style.Success, "Timer Reset");
-  }, [intervalId, setIsRunning, setAccumulatedSeconds, setLastStartTime, setCustomerProject, setTask, setComment, setIsBillable, setStartTimeStr]);
+    console.log("handleResetTimer finished");
+  // Dependencies now include resetForm from useForm
+  }, [intervalId, setIsRunning, setAccumulatedSeconds, setLastStartTime, setStartTimeStr, resetForm]);
 
+  // --- Form Submission Logic ---
+  async function submitTimeEntry(values: PapierkramFormValues) {
+    console.log("handleFormSubmit called with values:", values);
 
-  // --- Form Submission --- 
-  async function handleSubmit() {
-    if (!validateCustomerProject(customerProject)) return;
-    
     let currentAccumulated = accumulatedSeconds ?? 0;
-    let finalStartTime = startTime;
+    let finalStartTime = startTime; // Use derived Date object
 
     // If running, pause first to finalize accumulatedSeconds
     if (isRunning) {
        if (intervalId) clearInterval(intervalId);
        setIntervalId(null);
-       
        if (lastStartTime) {
          const elapsed = Math.floor((Date.now() - lastStartTime) / 1000);
          currentAccumulated += elapsed;
-         await setAccumulatedSeconds(currentAccumulated);
+         // No need to await setAccumulatedSeconds here, as we use currentAccumulated
        }
-       await setIsRunning(false); 
+       await setIsRunning(false);
        await setLastStartTime(null);
-       // No need to re-read startTime, useMemo keeps the derived 'startTime' up to date
-       // const savedStartTimeStr = await LocalStorage.getItem<string>(LS_KEY_SAVED_START_TIME);
-       // finalStartTime = savedStartTimeStr ? new Date(savedStartTimeStr) : null;
+       // Re-derive startTime just in case (though useMemo should handle it)
+       finalStartTime = startTimeStr ? new Date(startTimeStr) : null;
        showToast(Toast.Style.Success, "Timer auto-paused for saving");
-    } else {
-       // If timer wasn't running, ensure finalStartTime uses the current derived state
-       finalStartTime = startTime;
     }
 
     if (!finalStartTime) {
        showToast(Toast.Style.Failure, "Start time is missing.");
-       return;
+       return; // Return false or throw to prevent useForm clearing?
     }
 
     let finalEndTime : Date;
-    
-    // Check if user manually set an end time *after* pausing
-    if (endTime !== null) { 
-      finalEndTime = endTime; 
+    if (endTime !== null) {
+      finalEndTime = endTime;
     } else {
-      // Otherwise, calculate end time based on start and accumulated duration
       finalEndTime = new Date(finalStartTime.getTime() + currentAccumulated * 1000);
     }
-    
-    // Final sanity check - ensure end time isn't before start time if manually entered
+
     if (finalEndTime.getTime() < finalStartTime.getTime()) {
         showToast(Toast.Style.Failure, "End time cannot be before start time.");
-        return;
+        return; // prevent submission
     }
 
-    const values: TimeEntryValues = {
-        customerProject: customerProject ?? "", 
-        task: task ?? "",
-        comment: comment ?? "",
-        startTime: finalStartTime, // Use potentially re-read start time
-        endTime: finalEndTime, 
-        isBillable: isBillable ?? true,
+    const submissionData: TimeEntryValues = {
+        customerProject: values.customerProject,
+        task: values.task,
+        comment: values.comment,
+        startTime: finalStartTime,
+        endTime: finalEndTime,
+        isBillable: values.isBillable,
       };
 
     const durationSeconds = Math.floor((finalEndTime.getTime() - finalStartTime.getTime()) / 1000);
-
-    // Ensure calculated duration matches accumulated if timer was used (allowing for minor ms rounding)
     if (currentAccumulated > 0 && Math.abs(durationSeconds - currentAccumulated) > 1) {
          console.warn(`Mismatch between calculated duration (${durationSeconds}s) and accumulated timer (${currentAccumulated}s). Using calculated duration.`);
     }
 
-    console.log("Form submitted with values:", values);
+    console.log("Form submitted with data:", submissionData);
     console.log("Final Duration (seconds):", durationSeconds);
     showToast(Toast.Style.Success, "Time Entry Submitted (Placeholder)");
 
-    await handleResetTimer(); 
+    // Reset everything after successful placeholder submission
+    await handleResetTimer();
 
-    // TODO: Implement API call to Papierkram here using values
+    // TODO: Implement API call to Papierkram here using submissionData
   }
 
   return (
     <Form
+      enableDrafts={false}
       actions={
         <ActionPanel>
           <ActionPanel.Section title="Timer">
@@ -290,49 +344,44 @@ export default function PapierkramTimeTrackingCommand() {
             <Action title="Reset Timer" icon={{ source: "stop-icon.png" }} shortcut={{ modifiers: ["cmd", "shift"], key: "r" }} onAction={handleResetTimer} />
           </ActionPanel.Section>
           <ActionPanel.Section title="Entry">
-            <Action.SubmitForm title="Save Time Entry" onSubmit={handleSubmit} />
+            {/* Use the handleSubmit from useForm here */}
+            <Action.SubmitForm title="Save Time Entry" onSubmit={handleFormSubmit} />
           </ActionPanel.Section>
         </ActionPanel>
       }
+      // isLoading prop can be used if form loading takes time, e.g., fetching dropdown data
+      // isLoading={isLoadingFormValues.current} // Example: show loading while fetching initial values
     >
       <Form.Description text={`Log Time for Papierkram - Elapsed: ${displayTime}`} />
 
-      {/* Customer / Project Field */}
+      {/* Customer / Project Field - Use itemProps */}
       <Form.TextField
-        id="customerProject"
         title="Customer/Project"
         placeholder="Enter customer or project name"
-        value={customerProject ?? ""} 
-        onChange={setCustomerProject}
-        error={customerProjectError}
-        onBlur={(event) => validateCustomerProject(event.target.value)}
+        {...itemProps.customerProject} // Spread props from useForm
       />
 
-      {/* Task Field */}
+      {/* Task Field - Use itemProps */}
       <Form.TextField
-        id="task"
         title="Task"
         placeholder="Enter task description"
-        value={task ?? ""} 
-        onChange={setTask}
+        {...itemProps.task} // Spread props from useForm
       />
 
-      {/* Comment Field */}
+      {/* Comment Field - Use itemProps */}
       <Form.TextArea
-        id="comment"
         title="Comment"
         placeholder="Enter comments (optional)"
-        value={comment ?? ""} 
-        onChange={setComment}
+        {...itemProps.comment} // Spread props from useForm
       />
 
       <Form.Separator />
 
-      {/* Start Time Field */}
+      {/* Start Time Field - NOT managed by useForm, keep manual control */}
       <Form.DatePicker
-        id="startTime"
+        id="startTimePicker" // Different ID from form state
         title="Start Time"
-        value={startTime}
+        value={startTime} // Derived from useLocalStorage state
         onChange={(newValue) => {
           if (!isRunning) {
             setStartTimeStr(newValue ? newValue.toISOString() : null);
@@ -340,25 +389,23 @@ export default function PapierkramTimeTrackingCommand() {
         }}
       />
 
-      {/* End Time Field */}
+      {/* End Time Field - NOT managed by useForm, keep manual control */}
       <Form.DatePicker
-        id="endTime"
+        id="endTimePicker" // Different ID from form state
         title="End Time"
-        value={endTime}
+        value={endTime} // Local state
         onChange={(newValue) => {
-          if (!isRunning) { 
+          if (!isRunning) {
             setEndTime(newValue);
           }
         }}
       />
 
-      {/* Billable Checkbox */}
+      {/* Billable Checkbox - Use itemProps */}
       <Form.Checkbox
-        id="isBillable"
         label="Is this time entry billable?"
         title="Billable"
-        value={isBillable ?? true} 
-        onChange={setIsBillable}
+        {...itemProps.isBillable} // Spread props from useForm
       />
     </Form>
   );

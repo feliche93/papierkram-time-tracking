@@ -393,21 +393,23 @@ export default function PapierkramTimeTrackingCommand() {
         }}
       />
 
-      {/* End Time Field - NOT managed by useForm, keep manual control */}
-      <Form.DatePicker
-        id="endTimePicker" // Different ID from form state
-        title="End Time"
-        value={endTime} // Local state
-        onChange={(newValue) => {
-          console.log(`End Time DatePicker onChange: newValue = ${newValue}, isRunning = ${isRunning}`);
-          if (!isRunning) {
-            console.log("Timer is not running, updating endTime state.");
-            setEndTime(newValue);
-          } else {
-            console.log("Timer is running, preventing endTime update.");
-          }
-        }}
-      />
+      {/* End Time Field - Conditionally render only when timer is NOT running */}
+      {!isRunning && (
+        <Form.DatePicker
+          id="endTimePicker" // Different ID from form state
+          title="End Time"
+          value={endTime} // Local state
+          onChange={(newValue) => {
+            console.log(`End Time DatePicker onChange: newValue = ${newValue}, isRunning = ${isRunning}`);
+            if (!isRunning) {
+              console.log("Timer is not running, updating endTime state.");
+              setEndTime(newValue);
+            } else {
+              console.log("Timer is running, preventing endTime update.");
+            }
+          }}
+        />
+      )}
 
       {/* Billable Checkbox - Use itemProps */}
       <Form.Checkbox

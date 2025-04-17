@@ -13,8 +13,8 @@
   "commands": [
     {
       "name": "papierkram-time-tracking",
-      "title": "Papierkram Time Tracking",
-      "description": "Track time for a given Papierkram Projekt",
+      "title": "Log Time Entry",
+      "description": "Log a time entry to Papierkram",
       "mode": "view"
     }
   ],

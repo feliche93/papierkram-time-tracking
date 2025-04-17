@@ -72,6 +72,9 @@ export default function PapierkramTimeTrackingCommand() {
   const isInitialCalculationDone = useRef(false);
   const isLoadingFormValues = useRef(true); // Flag to prevent sync effect running before initial load
 
+  // Log endTime state on each render
+  console.log("Rendering component, current endTime state:", endTime);
+
   // --- Effects ---
 
   // Effect: Load initial form values from LocalStorage ONCE on mount
@@ -85,15 +88,14 @@ export default function PapierkramTimeTrackingCommand() {
           LocalStorage.getItem<string>(LS_KEY_SAVED_IS_BILLABLE) // Read as string first
         ]);
 
-        const initialBillable = initialBillableStr === null ? true : initialBillableStr === 'true'; // Default true
 
-        console.log("Loaded initial values:", { initialProject, initialTask, initialComment, initialBillable });
+        console.log("Loaded initial values:", { initialProject, initialTask, initialComment });
 
         resetForm({
           customerProject: initialProject ?? "",
           task: initialTask ?? "",
           comment: initialComment ?? "",
-          isBillable: initialBillable,
+          isBillable: true,
         });
       } catch (error) {
         console.error("Failed to load initial form values:", error);
@@ -214,13 +216,15 @@ export default function PapierkramTimeTrackingCommand() {
     
     // Now set isRunning to false and clear lastStartTime
     await setIsRunning(false);
-    await setLastStartTime(null); // Clear last start time when paused
+    await setLastStartTime(null);
 
-    // const now = new Date(); // Don't set endTime state automatically on pause
-    // setEndTime(now);
-    setDisplayTime(formatTime(finalAccumulated)); 
+    // Calculate and set the endTime state when pausing
+    const now = new Date();
+    console.log("handlePauseTimer: Setting endTime state to", now);
+    setEndTime(now);
+
+    setDisplayTime(formatTime(finalAccumulated));
     showToast(Toast.Style.Success, "Timer Paused");
-
   }, [intervalId, lastStartTime, accumulatedSeconds, setAccumulatedSeconds, setLastStartTime, setIsRunning]);
 
   const handleResumeTimer = useCallback(async () => {
@@ -395,8 +399,12 @@ export default function PapierkramTimeTrackingCommand() {
         title="End Time"
         value={endTime} // Local state
         onChange={(newValue) => {
+          console.log(`End Time DatePicker onChange: newValue = ${newValue}, isRunning = ${isRunning}`);
           if (!isRunning) {
+            console.log("Timer is not running, updating endTime state.");
             setEndTime(newValue);
+          } else {
+            console.log("Timer is running, preventing endTime update.");
           }
         }}
       />

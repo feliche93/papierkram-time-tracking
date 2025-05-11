@@ -4,20 +4,19 @@ import { TPapierkramForm } from "../papierkram-time-tracking"; // Adjust path as
 
 // --- Props for the Action Panel Component ---
 interface TimerActionPanelProps {
-  timerState: "running" | "paused" | "stopped";
+  timerState: TPapierkramForm["persistedTimerState"];
   onStart: () => void;
-  onPause: () => void;
   onResume: () => void;
   onStop: () => void;
   onSubmitEntry: (values: TPapierkramForm) => void;
 }
 
 // --- Action Panel Component ---
-function TimerActionPanel({ timerState, onStart, onPause, onResume, onStop, onSubmitEntry }: TimerActionPanelProps) {
+function TimerActionPanel({ timerState, onStart, onResume, onStop, onSubmitEntry }: TimerActionPanelProps) {
   return (
     <ActionPanel>
       <ActionPanel.Section title="Timer">
-        {timerState === "stopped" && (
+        {typeof timerState === "undefined" && (
           <Action
             key="start"
             title="Start Timer"
@@ -27,17 +26,7 @@ function TimerActionPanel({ timerState, onStart, onPause, onResume, onStop, onSu
           />
         )}
 
-        {timerState === "running" && (
-          <Action
-            key="pause"
-            title="Pause Timer"
-            icon={Icon.Pause}
-            shortcut={{ modifiers: ["cmd", "shift"], key: "p" }}
-            onAction={onPause}
-          />
-        )}
-
-        {timerState === "paused" && (
+        {timerState === "stopped" && (
           <Action
             key="resume"
             title="Resume Timer"
@@ -47,7 +36,7 @@ function TimerActionPanel({ timerState, onStart, onPause, onResume, onStop, onSu
           />
         )}
 
-        {(timerState === "running" || timerState === "paused") && (
+        {(timerState === "running") && (
           <Action
             key="stop"
             title="Stop Timer"
